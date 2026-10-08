@@ -200,6 +200,24 @@ void MandelbrotViewer::updateUIText(sf::Vector2i mouseWindowCoords) {
 double MandelbrotViewer::mandelbrot(double cX, double cY, int maxIters) const {
     // TODO: return the number of iterations it takes for z to escape a radius of 2,
     //       if it happens within maxIters iterations, otherwise return infinity.
+    double prev[] = {0.0, 0.0};
+    for ( int i = 1; i <= maxIters; i++ ) {
+        //  z = prev^2 + (cX + cYi)
+        double z[] = {  //  (a + bi)^2 = (a^2 - b^2) + 2abi
+            pow(prev[0],2)-pow(prev[1],2) + cX, // X
+            2.0 * prev[0] * prev[1] + cY        // Yi
+        };
+
+        // Check if iteration is in the set. Return escape time if true
+        double norm = sqrt(z[0]*z[0] + z[1]*z[1]);
+        if (norm > 2) {
+            return i;
+        }
+
+        // prev = z
+        prev[0] = z[0]; prev[1] = z[1];
+    }
+
 
     return std::numeric_limits<double>::infinity();  // get rid of this and add your code here...
 }
