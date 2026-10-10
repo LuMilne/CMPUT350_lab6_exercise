@@ -4,6 +4,7 @@
 #include <cmath>
 #include <memory>
 #include <sstream>
+#include <iostream>
 
 #include "cyclic_gradient.h"
 #include "open_sans_semibold.h"
@@ -146,6 +147,37 @@ void MandelbrotViewer::handleZoom(double scrollDistance, sf::Vector2i mousePosit
     // In particular, the new world-coordinates rectangle will be of size
     // (worldViewFactor * (orig world width), worldViewFactor * (orig world height)),
     // and the user's cursor will point to exactly the same thing before and after the zoom.
+
+    // get position of mouse relative to world origin
+    sf::Vector2<double> relativeMouse = windowPosToWorld((sf::Vector2<double>)mousePosition);
+    
+    sf::Vector2<double> worldSize = sf::Vector2<double>(
+        mMaxPointWorld.x - mMinPointWorld.x,
+        mMaxPointWorld.y - mMinPointWorld.y
+    );
+
+    // get mouse position as percentage of world
+    sf::Vector2<double> percentPos = sf::Vector2<double>(
+        (relativeMouse.x - mMinPointWorld.x) / worldSize.x,
+        (relativeMouse.y - mMinPointWorld.y) / worldSize.y
+    );
+
+    // Zoom
+    worldSize.x = worldSize.x * worldViewFactor;
+    worldSize.y = worldSize.y * worldViewFactor;
+
+    // get new centre of world
+    const sf::Vector2<double> desiredCenter = sf::Vector2<double>(
+        relativeMouse.x - ( percentPos.x - 0.5f ) * worldSize.x,
+        relativeMouse.y - ( percentPos.y - 0.5f ) * worldSize.y
+    );
+
+    // expand borders around new centre
+    mMinPointWorld.x = desiredCenter.x - worldSize.x/2;
+    mMinPointWorld.y = desiredCenter.y - worldSize.y/2;
+
+    mMaxPointWorld.x = desiredCenter.x + worldSize.x/2;
+    mMaxPointWorld.y = desiredCenter.y + worldSize.y/2;
 }
 
 void MandelbrotViewer::handleWindowResize(sf::Vector2u newSize)  // newSize is in window coords.
@@ -209,9 +241,9 @@ double MandelbrotViewer::mandelbrot(double cX, double cY, int maxIters) const {
         };
 
         // Check if iteration is in the set. Return escape time if true
-        double norm = sqrt(z[0]*z[0] + z[1]*z[1]);
-        if (norm > 2) {
-            return i;
+        double normSq = z[0]*z[0] + z[1]*z[1];
+        if (normSq > 4) {   // Computationally easier to not use sqrt
+            return i + 1 - std::log(std::log(normSq)) / LOG_2;
         }
 
         // prev = z
@@ -228,6 +260,25 @@ double MandelbrotViewer::mandelbrotSmooth(double cX, double cY, int maxIters) co
     //       If you use an escape radius of exactly 2, you will see some artifacts. Use a
     //       higher radius (this is still correct, since divergence -> infty), but with more
     //       computational cost (since you need to simulate more steps).
+    double prev[] = {0.0, 0.0};
+    for ( int i = 1; i <= maxIters; i++ ) {
+        //  z = prev^2 + (cX + cYi)
+        double z[] = {  //  (a + bi)^2 = (a^2 - b^2) + 2abi
+            pow(prev[0],2)-pow(prev[1],2) + cX, // X
+            2.0 * prev[0] * prev[1] + cY        // Yi
+        };
+
+        // Check if iteration is in the set. Return escape time if true
+        double normSq = z[0]*z[0] + z[1]*z[1];
+        if (normSq > 4) {   // Computationally easier to not use sqrt
+            return i + 1 - std::log(std::log(normSq)) / LOG_2;
+        }
+
+        // prev = z
+        prev[0] = z[0]; prev[1] = z[1];
+    }
+
+
     return std::numeric_limits<double>::infinity();  // get rid of this and add your code here...
 }
 
@@ -237,7 +288,12 @@ sf::Vector2<double> MandelbrotViewer::windowPosToWorld(const sf::Vector2<double>
     //       the caller will have to cast to sf::Vector2<double>), convert them into world
     //       coordinates in the context of the current world view.
 
-    return {};
+    return sf::Vector2<double>(
+        // world origin + position-in-window / window size * world size
+        mMinPointWorld.x + pWindow.x / mWindowSize.x * (mMaxPointWorld.x - mMinPointWorld.x),
+        // factor difference in y-origin between window and mMinPointWorld
+        mMaxPointWorld.y - pWindow.y / mWindowSize.y * (mMaxPointWorld.y - mMinPointWorld.y)
+    );
 }
 
 // drawIntoBuffer renders the current world view (bounded by mMinPointWorld and mMaxPointWorld)
@@ -250,6 +306,27 @@ void MandelbrotViewer::drawIntoViewBuffer(int maxIters) {
     //       the escape radius (using mandelbrotSmooth() or mandelbrot()). If it never escapes,
     //       color the pixel black, otherwise, pass the escape iteration number to
     //       CyclicGradient::DEFAULT_GRADIENT(n) to get a colour to set the pixel to.
+//    sf::Image img = sf::Image(mWindowSize,sf::Color::Black);
+    // Iterate for every pixel in the image
+    for(int x=0; x < mViewBuffer.getSize().x; x++) {
+        for(int y=0; y < mViewBuffer.getSize().y; y++) {
+            // x+0.5 to select centre of pixel
+            // world origin + relative position / image size * world size
+            sf::Vector2<double> worldCoords = sf::Vector2<double>(
+                mMinPointWorld.x + (x+0.5) / mViewBuffer.getSize().x * (mMaxPointWorld.x - mMinPointWorld.x),
+                // factor difference in y-origin between window and mMinPointWorld
+                mMaxPointWorld.y - (y+0.5) / mViewBuffer.getSize().y * (mMaxPointWorld.y - mMinPointWorld.y)
+            ); 
+            double esc = mandelbrotSmooth(worldCoords.x,worldCoords.y,maxIters);
+            if ( !std::isinf(esc) ) {   // Set colour based on escape time
+                mViewBuffer.setPixel(sf::Vector2u(x,y), CyclicGradient::DEFAULT_GRADIENT(esc));
+            }
+            else {
+//                std::cout << "(" << x << ',' << y << ") has no escape time\n";
+                mViewBuffer.setPixel(sf::Vector2u(x,y), sf::Color::Black);
+            }
+        }
+    }
 }
 
 // copyViewBufferToGPU takes the drawn CPU-side buffer mViewBuffer and copies it to the
@@ -257,6 +334,7 @@ void MandelbrotViewer::drawIntoViewBuffer(int maxIters) {
 void MandelbrotViewer::copyViewBufferToGPU() {
     // TODO: load mViewBuffer from the CPU into mViewBufferGPU on the GPU.
     // Hint: this is a one-liner.
+    mViewBufferGPU.loadFromImage(mViewBuffer);
 }
 
 // draw clears the window, draws the view, as well as the text with its shadow underneath
